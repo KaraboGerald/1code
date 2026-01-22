@@ -96,7 +96,6 @@ import {
   filteredDiffFilesAtom,
   filteredSubChatIdAtom,
   isCreatingPrAtom,
-  selectedDiffFilePathAtom,
   isPlanModeAtom,
   justCreatedIdsAtom,
   lastSelectedModelIdAtom,
@@ -110,6 +109,7 @@ import {
   QUESTIONS_SKIPPED_MESSAGE,
   selectedAgentChatIdAtom,
   selectedCommitAtom,
+  selectedDiffFilePathAtom,
   setLoading,
   subChatFilesAtom,
   undoStackAtom,
@@ -117,6 +117,7 @@ import {
 } from "../atoms"
 import { AgentSendButton } from "../components/agent-send-button"
 import { PreviewSetupHoverCard } from "../components/preview-setup-hover-card"
+import type { TextSelectionSource } from "../context/text-selection-context"
 import { TextSelectionProvider } from "../context/text-selection-context"
 import { useAgentsFileUpload } from "../hooks/use-agents-file-upload"
 import { useChangedFilesTracking } from "../hooks/use-changed-files-tracking"
@@ -138,8 +139,8 @@ import {
   toQueuedTextContext,
 } from "../lib/queue-utils"
 import {
-  type AgentsMentionsEditorHandle,
   MENTION_PREFIXES,
+  type AgentsMentionsEditorHandle,
 } from "../mentions"
 import {
   ChatSearchBar,
@@ -170,11 +171,10 @@ import { AgentUserQuestion, type AgentUserQuestionHandle } from "../ui/agent-use
 import { AgentsHeaderControls } from "../ui/agents-header-controls"
 import { ChatTitleEditor } from "../ui/chat-title-editor"
 import { MobileChatHeader } from "../ui/mobile-chat-header"
+import { QuickCommentInput } from "../ui/quick-comment-input"
 import { SubChatSelector } from "../ui/sub-chat-selector"
 import { SubChatStatusCard } from "../ui/sub-chat-status-card"
 import { TextSelectionPopover } from "../ui/text-selection-popover"
-import { QuickCommentInput } from "../ui/quick-comment-input"
-import type { TextSelectionSource } from "../context/text-selection-context"
 import { autoRenameAgentChat } from "../utils/auto-rename"
 import { generateCommitToPrMessage, generatePrMessage, generateReviewMessage } from "../utils/pr-message"
 import { ChatInputArea } from "./chat-input-area"
@@ -3569,6 +3569,8 @@ const ChatViewInner = memo(function ChatViewInner({
 
   // Keyboard shortcut: Cmd+Enter to approve plan
   useEffect(() => {
+    if (!isActive) return
+
     const handleKeyDown = (e: KeyboardEvent) => {
       if (
         e.key === "Enter" &&
@@ -3584,7 +3586,7 @@ const ChatViewInner = memo(function ChatViewInner({
 
     window.addEventListener("keydown", handleKeyDown)
     return () => window.removeEventListener("keydown", handleKeyDown)
-  }, [hasUnapprovedPlan, isStreaming, handleApprovePlan])
+  }, [isActive, hasUnapprovedPlan, isStreaming, handleApprovePlan])
 
   // Cmd/Ctrl + Arrow Down to scroll to bottom (works even when focused in input)
   // But don't intercept if input has content - let native cursor navigation work

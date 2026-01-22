@@ -1,12 +1,11 @@
 "use client"
 
-import { memo, useCallback, useRef, useState, useEffect } from "react"
-import { createPortal } from "react-dom"
 import { useAtom, useAtomValue } from "jotai"
 import { ChevronDown, Zap } from "lucide-react"
+import { memo, useCallback, useEffect, useRef, useState } from "react"
+import { createPortal } from "react-dom"
 
 import { Button } from "../../../components/ui/button"
-import { Switch } from "../../../components/ui/switch"
 import {
   DropdownMenu,
   DropdownMenuContent,
@@ -28,40 +27,39 @@ import {
   PromptInputActions,
   PromptInputContextItems,
 } from "../../../components/ui/prompt-input"
+import { Switch } from "../../../components/ui/switch"
+import {
+  autoOfflineModeAtom,
+  customClaudeConfigAtom,
+  extendedThinkingEnabledAtom,
+  normalizeCustomClaudeConfig,
+  selectedOllamaModelAtom,
+  showOfflineModeFeaturesAtom
+} from "../../../lib/atoms"
+import { trpc } from "../../../lib/trpc"
 import { cn } from "../../../lib/utils"
-import { isPlanModeAtom, lastSelectedModelIdAtom } from "../atoms"
+import { isPlanModeAtom, lastSelectedModelIdAtom, type SubChatFileChange } from "../atoms"
 import { AgentsSlashCommand, COMMAND_PROMPTS, type SlashCommandOption } from "../commands"
 import { AgentSendButton } from "../components/agent-send-button"
+import type { UploadedFile, UploadedImage } from "../hooks/use-agents-file-upload"
 import {
+  clearSubChatDraft,
+  saveSubChatDraftWithAttachments,
+} from "../lib/drafts"
+import { CLAUDE_MODELS } from "../lib/models"
+import type { DiffTextContext, SelectedTextContext } from "../lib/queue-utils"
+import {
+  AgentsFileMention,
   AgentsMentionsEditor,
   type AgentsMentionsEditorHandle,
   type FileMentionOption,
 } from "../mentions"
-import { AgentsFileMention } from "../mentions"
 import { AgentContextIndicator, type MessageTokenData } from "../ui/agent-context-indicator"
+import { AgentDiffTextContextItem } from "../ui/agent-diff-text-context-item"
 import { AgentFileItem } from "../ui/agent-file-item"
 import { AgentImageItem } from "../ui/agent-image-item"
 import { AgentTextContextItem } from "../ui/agent-text-context-item"
-import { AgentDiffTextContextItem } from "../ui/agent-diff-text-context-item"
-import type { SelectedTextContext, DiffTextContext } from "../lib/queue-utils"
-import type { UploadedImage, UploadedFile } from "../hooks/use-agents-file-upload"
 import { handlePasteEvent } from "../utils/paste-text"
-import {
-  saveSubChatDraftWithAttachments,
-  clearSubChatDraft,
-} from "../lib/drafts"
-import { CLAUDE_MODELS } from "../lib/models"
-import { type SubChatFileChange } from "../atoms"
-import {
-  customClaudeConfigAtom,
-  normalizeCustomClaudeConfig,
-  activeConfigAtom,
-  autoOfflineModeAtom,
-  showOfflineModeFeaturesAtom,
-  extendedThinkingEnabledAtom,
-  selectedOllamaModelAtom,
-} from "../../../lib/atoms"
-import { trpc } from "../../../lib/trpc"
 
 // Hook to get available models (including offline models if Ollama is available and debug enabled)
 function useAvailableModels() {
@@ -719,7 +717,7 @@ export const ChatInputArea = memo(function ChatInputArea({
                   onSubmit={onSubmitWithQuestionAnswer || handleEditorSubmit}
                   onForceSubmit={onForceSend}
                   onShiftTab={() => setIsPlanMode((prev) => !prev)}
-                  placeholder={isStreaming ? "Add follow up" : "Plan, @ for context, / for commands"}
+                  placeholder={isStreaming ? "Add to the queue" : "Plan, @ for context, / for commands"}
                   className={cn(
                     "bg-transparent max-h-[200px] overflow-y-auto p-1",
                     isMobile && "min-h-[56px]",

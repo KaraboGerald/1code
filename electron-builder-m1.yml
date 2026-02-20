@@ -1,0 +1,101 @@
+# Enhanced electron-builder config for Apple Silicon with fallback options
+# This config is optimized for M1/M2/M3 processors
+
+appId: dev.21st.agents
+productName: 1Code
+
+# Extend base configuration
+extends: electron-builder.yml
+
+directories:
+  output: release
+
+mac:
+  # Apple Silicon specific settings
+  target:
+    - target: dmg
+      arch:
+        - arm64
+    - target: zip
+      arch:
+        - arm64
+
+  # Performance optimizations for M processors
+  compression: maximum
+  artifactName: "${productName}-${version}-${arch}.${ext}"
+
+  # Identity and notarization (uses env vars from base config if provided)
+  hardenedRuntime: true
+  gatekeeperAssess: false
+
+dmg:
+  # Optimized DMG settings for Apple Silicon
+  sign: false  # Sign after creation to avoid hdiutil issues
+
+  # Use internet-enabled DMGs (more reliable on M processors)
+  internetEnabled: true
+
+  # Compression settings
+  format: UDZO
+
+  # Window appearance
+  window:
+    width: 540
+    height: 380
+
+  # Icon layout
+  contents:
+    - x: 140
+      y: 150
+      type: file
+    - x: 400
+      y: 150
+      type: link
+      path: /Applications
+
+  iconSize: 80
+
+  # Write DMG options (helps with hdiutil issues)
+  writeUpdateInfo: false
+
+# Build options
+npmRebuild: true
+nodeGypRebuild: false
+
+# Optimization for faster builds
+compression: maximum
+
+# Files configuration
+files:
+  - out/**/*
+  - "!**/*.map"
+  - "!**/node_modules/*/{CHANGELOG.md,README.md,README,readme.md,readme}"
+  - "!**/node_modules/*/{test,__tests__,tests,powered-test,example,examples}"
+
+# Extra resources
+extraResources:
+  - from: drizzle
+    to: migrations
+  - from: resources/bin/${platform}-${arch}
+    to: bin
+    filter:
+      - "**/*"
+  - from: resources/bin/VERSION
+    to: bin/VERSION
+
+# ASAR configuration
+asar: true
+asarUnpack:
+  - node_modules/better-sqlite3/**/*
+  - node_modules/node-pty/**/*
+  - node_modules/@anthropic-ai/claude-agent-sdk/**/*
+  - node_modules/@zed-industries/codex-acp/**/*
+  - node_modules/@zed-industries/codex-acp-*/**/*
+
+# Publishing configuration
+publish:
+  provider: generic
+  url: https://cdn.21st.dev/releases/desktop
+
+# After pack hook for additional processing
+afterPack: ./scripts/after-pack.mjs

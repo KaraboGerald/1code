@@ -181,16 +181,66 @@ function toUnpackedAsarPath(filePath: string): string {
   return filePath
 }
 
+function resolveBundledCodexAcpBinaryPath(): string | null {
+  const binaryName = process.platform === "win32" ? "codex-acp.exe" : "codex-acp"
+
+  const candidates = app.isPackaged
+    ? [
+        join(process.resourcesPath, "bin", binaryName),
+        join(process.resourcesPath, "bin", `${process.platform}-${process.arch}`, binaryName),
+      ]
+    : [join(app.getAppPath(), "resources", "bin", `${process.platform}-${process.arch}`, binaryName)]
+
+  for (const candidate of candidates) {
+    if (existsSync(candidate)) {
+      return candidate
+    }
+  }
+
+  return null
+}
+
 function resolveCodexAcpBinaryPath(): string {
+  const bundledBinaryPath = resolveBundledCodexAcpBinaryPath()
+  if (bundledBinaryPath) {
+    return bundledBinaryPath
+  }
+
   const packageName = getCodexPackageName()
   const binaryName = process.platform === "win32" ? "codex-acp.exe" : "codex-acp"
   const codexPackageRoot = dirname(
     require.resolve("@zed-industries/codex-acp/package.json"),
   )
-  const resolvedPath = require.resolve(`${packageName}/bin/${binaryName}`, {
-    // Resolve relative to the wrapper package so nested optional deps work in packaged apps.
-    paths: [codexPackageRoot],
-  })
+
+  let resolvedPath: string
+  try {
+    resolvedPath = require.resolve(`${packageName}/bin/${binaryName}`, {
+      // Resolve relative to the wrapper package so nested optional deps work in packaged apps.
+      paths: [codexPackageRoot],
+    })
+  } catch (error) {
+    // On Apple Silicon, x64 app builds may run under Rosetta while only arm64 optional deps exist.
+    // Fall back to the arm64 binary if present so Codex remains functional in local test builds.
+    if (process.platform === "darwin" && process.arch === "x64") {
+      try {
+        resolvedPath = require.resolve(
+          "@zed-industries/codex-acp-darwin-arm64/bin/codex-acp",
+          { paths: [codexPackageRoot] },
+        )
+      } catch {
+        throw new Error(
+          `[codex] Failed to resolve Codex ACP binary (${packageName}). ` +
+            "Rebuild with matching architecture dependencies, or run the arm64 app build.",
+          { cause: error as Error },
+        )
+      }
+    } else {
+      throw new Error(
+        `[codex] Failed to resolve Codex ACP binary (${packageName}).`,
+        { cause: error as Error },
+      )
+    }
+  }
 
   return toUnpackedAsarPath(resolvedPath)
 }
@@ -1556,13 +1606,11 @@ export const codexRouter = router({
                   return {
                     model: metadataModel,
                     sessionId,
-                    ...(continuityMetadata || {}),
                   }
                 }
 
                 return {
                   model: metadataModel,
-                  ...(continuityMetadata || {}),
                 }
               },
               onFinish: ({ responseMessage, isContinuation }) => {

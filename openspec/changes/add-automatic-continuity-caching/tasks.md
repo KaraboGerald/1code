@@ -17,7 +17,7 @@
 - [ ] 2.2 Add integration tests for pack injection and rehydrate correctness.
 - [x] 2.3 Add telemetry for cache hit/miss, injected bytes, and governor action rates.
 - [x] 2.4 Validate no automatic commits occur on feature branches in default configuration.
-- [ ] 2.5 Run TypeScript checks and targeted regression checks for chat streaming paths.
+- [x] 2.5 Run TypeScript checks and targeted regression checks for chat streaming paths.
 
 ## 3. Rollout
 - [x] 3.1 Ship behind feature flag with passive metrics-only mode first.

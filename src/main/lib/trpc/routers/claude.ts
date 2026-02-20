@@ -30,7 +30,7 @@ import {
   type ClaudeConfig,
   type McpServerConfig,
 } from "../../claude-config"
-import { anthropicAccounts, anthropicSettings, chats, claudeCodeCredentials, getDatabase, projects as projectsTable, subChats } from "../../db"
+import { anthropicAccounts, anthropicSettings, chats, claudeCodeCredentials, continuitySettings, getDatabase, projects as projectsTable, subChats } from "../../db"
 import { createRollbackStash } from "../../git/stash"
 import {
   ensureMcpTokensFresh,
@@ -346,6 +346,183 @@ const pendingToolApprovals = new Map<
 >()
 
 const PLAN_MODE_BLOCKED_TOOLS = new Set(["Bash", "NotebookEdit"])
+const HISTORY_COMPACTION_CHAR_THRESHOLD = 48_000
+const HISTORY_COMPACTION_KEEP_MESSAGES = 8
+const HISTORY_COMPACTION_MAX_LINES = 24
+const CLAUDE_RESTRICTED_AGENT_TOOLS = [
+  "Read",
+  "Glob",
+  "Grep",
+  "LS",
+  "Edit",
+  "MultiEdit",
+  "Write",
+  "Bash",
+  "TodoWrite",
+  "Task",
+  "AskUserQuestion",
+]
+const CLAUDE_RESTRICTED_PLAN_TOOLS = [
+  "Read",
+  "Glob",
+  "Grep",
+  "LS",
+  "Edit",
+  "Write",
+  "MultiEdit",
+  "AskUserQuestion",
+  "ExitPlanMode",
+]
+
+type ResolvedRunBudgetPolicy = {
+  profile: "low-token" | "normal" | "plan" | "deep-debug"
+  maxThinkingTokens: number
+  maxTurns: number
+  maxBudgetUsd: number
+  allowedTools: string[]
+  includeMcpSchemas: boolean
+  mcpMode: "off" | "explicit" | "all"
+  terseOutput: boolean
+}
+
+function flattenMessageText(message: any): string {
+  if (!message?.parts || !Array.isArray(message.parts)) return ""
+  const texts = message.parts
+    .map((part: any) => {
+      if (part?.type === "text" && typeof part.text === "string") return part.text
+      if (part?.type === "text-delta" && typeof part.delta === "string") return part.delta
+      return ""
+    })
+    .filter(Boolean)
+  return texts.join("\n")
+}
+
+function maybeCompactHistoryMessages(messages: any[]): {
+  compacted: boolean
+  messages: any[]
+  compactedChars: number
+  originalCount: number
+} {
+  if (!Array.isArray(messages) || messages.length <= HISTORY_COMPACTION_KEEP_MESSAGES) {
+    return { compacted: false, messages, compactedChars: 0, originalCount: Array.isArray(messages) ? messages.length : 0 }
+  }
+
+  const originalCount = messages.length
+  const combinedText = messages.map((m) => flattenMessageText(m)).join("\n")
+  if (combinedText.length <= HISTORY_COMPACTION_CHAR_THRESHOLD) {
+    return { compacted: false, messages, compactedChars: 0, originalCount }
+  }
+
+  const head = messages.slice(0, -HISTORY_COMPACTION_KEEP_MESSAGES)
+  const tail = messages.slice(-HISTORY_COMPACTION_KEEP_MESSAGES)
+  const summaryLines = head
+    .map((m: any) => {
+      const role = m?.role === "assistant" ? "assistant" : "user"
+      const text = flattenMessageText(m).replace(/\s+/g, " ").trim()
+      if (!text) return ""
+      return `- ${role}: ${text.slice(0, 180)}`
+    })
+    .filter((line: string) => line.length > 0)
+    .slice(-HISTORY_COMPACTION_MAX_LINES)
+
+  const summaryMessage = {
+    id: crypto.randomUUID(),
+    role: "assistant",
+    parts: [
+      {
+        type: "text",
+        text: [
+          "[SYSTEM HISTORY SUMMARY]",
+          `Compacted ${head.length} earlier messages to control context growth.`,
+          ...summaryLines,
+        ].join("\n"),
+      },
+    ],
+    metadata: {
+      historyCompacted: true,
+      compactedAt: new Date().toISOString(),
+      compactedMessages: head.length,
+    },
+  }
+
+  return {
+    compacted: true,
+    messages: [summaryMessage, ...tail],
+    compactedChars: combinedText.length,
+    originalCount,
+  }
+}
+
+function resolveRunBudgetPolicy(input: {
+  mode: "plan" | "agent"
+  tokenMode: "low" | "normal" | "debug"
+  requestedThinkingTokens?: number
+  prompt: string
+  toolMentions: string[]
+  enableTasks: boolean
+}): ResolvedRunBudgetPolicy {
+  const explicitDeepDebug =
+    input.tokenMode === "debug" &&
+    typeof input.requestedThinkingTokens === "number" &&
+    input.requestedThinkingTokens >= 12_000
+
+  const explicitMcp =
+    input.toolMentions.length > 0 ||
+    /\b(mcp|model context protocol)\b/i.test(input.prompt)
+
+  if (explicitDeepDebug) {
+    return {
+      profile: "deep-debug",
+      maxThinkingTokens: 32_000,
+      maxTurns: 4,
+      maxBudgetUsd: 0.75,
+      allowedTools: input.enableTasks
+        ? [...CLAUDE_RESTRICTED_AGENT_TOOLS]
+        : CLAUDE_RESTRICTED_AGENT_TOOLS.filter((tool) => tool !== "TodoWrite" && tool !== "Task"),
+      includeMcpSchemas: explicitMcp,
+      mcpMode: explicitMcp ? "all" : "off",
+      terseOutput: false,
+    }
+  }
+
+  if (input.mode === "plan") {
+    const thinkingBase =
+      input.tokenMode === "low" ? 6_000 : input.tokenMode === "debug" ? 12_000 : 8_000
+    return {
+      profile: "plan",
+      maxThinkingTokens: Math.min(
+        Math.max(input.requestedThinkingTokens ?? thinkingBase, 4_000),
+        12_000,
+      ),
+      maxTurns: 2,
+      maxBudgetUsd: input.tokenMode === "low" ? 0.08 : input.tokenMode === "debug" ? 0.2 : 0.12,
+      allowedTools: input.enableTasks
+        ? [...CLAUDE_RESTRICTED_PLAN_TOOLS, "TodoWrite", "Task"]
+        : [...CLAUDE_RESTRICTED_PLAN_TOOLS],
+      includeMcpSchemas: false,
+      mcpMode: explicitMcp ? "explicit" : "off",
+      terseOutput: true,
+    }
+  }
+
+  const thinkingBase =
+    input.tokenMode === "low" ? 2_000 : input.tokenMode === "debug" ? 6_000 : 4_000
+  return {
+    profile: input.tokenMode === "low" ? "low-token" : "normal",
+    maxThinkingTokens: Math.min(
+      Math.max(input.requestedThinkingTokens ?? thinkingBase, 1_500),
+      6_000,
+    ),
+    maxTurns: input.tokenMode === "debug" ? 2 : 1,
+    maxBudgetUsd: input.tokenMode === "low" ? 0.05 : input.tokenMode === "debug" ? 0.2 : 0.1,
+    allowedTools: input.enableTasks
+      ? [...CLAUDE_RESTRICTED_AGENT_TOOLS]
+      : CLAUDE_RESTRICTED_AGENT_TOOLS.filter((tool) => tool !== "TodoWrite" && tool !== "Task"),
+    includeMcpSchemas: false,
+    mcpMode: explicitMcp ? "explicit" : "off",
+    terseOutput: true,
+  }
+}
 
 const clearPendingApprovals = (message: string, subChatId?: string) => {
   for (const [toolUseId, pending] of pendingToolApprovals) {
@@ -898,8 +1075,21 @@ export const claudeRouter = router({
               .from(subChats)
               .where(eq(subChats.id, input.subChatId))
               .get()
-            const existingMessages = JSON.parse(existing?.messages || "[]")
-            const existingSessionId = existing?.sessionId || null
+            let existingMessages = JSON.parse(existing?.messages || "[]")
+            let existingSessionId = existing?.sessionId || null
+            const compactedHistory = maybeCompactHistoryMessages(existingMessages)
+            if (compactedHistory.compacted) {
+              existingMessages = compactedHistory.messages
+              existingSessionId = null
+              db.update(subChats)
+                .set({
+                  messages: JSON.stringify(existingMessages),
+                  sessionId: null,
+                  updatedAt: new Date(),
+                })
+                .where(eq(subChats.id, input.subChatId))
+                .run()
+            }
 
             // Get resumeSessionAt UUID only if shouldResume flag was set (by rollbackToMessage)
             // or shouldForkResume flag was set (by forkSubChat)
@@ -1045,7 +1235,7 @@ export const claudeRouter = router({
             const stderrLines: string[] = []
 
             // Parse mentions from prompt (agents, skills, files, folders)
-            const { cleanedPrompt, agentMentions, skillMentions } =
+            const { cleanedPrompt, agentMentions, skillMentions, toolMentions } =
               parseMentions(input.prompt)
 
             // Build agents option for SDK (proper registration via options.agents)
@@ -1084,6 +1274,26 @@ export const claudeRouter = router({
               finalPrompt = `${finalPrompt}\n\nUse the "${skillMentions.join('", "')}" skill(s) for this task.`
             }
 
+            const settingsRow = db
+              .select({ tokenMode: continuitySettings.tokenMode })
+              .from(continuitySettings)
+              .where(eq(continuitySettings.id, "singleton"))
+              .get()
+            const configuredTokenMode =
+              settingsRow?.tokenMode === "low" ||
+              settingsRow?.tokenMode === "normal" ||
+              settingsRow?.tokenMode === "debug"
+                ? settingsRow.tokenMode
+                : "normal"
+            const runBudgetPolicy = resolveRunBudgetPolicy({
+              mode: input.mode,
+              tokenMode: configuredTokenMode,
+              requestedThinkingTokens: input.maxThinkingTokens,
+              prompt: finalPrompt,
+              toolMentions,
+              enableTasks: input.enableTasks !== false,
+            })
+
             const continuityEnabled = isContinuityEnabled()
             const continuityPrompt = continuityEnabled
               ? await continuityService.apply({
@@ -1108,11 +1318,15 @@ export const claudeRouter = router({
                   continuityStateIds: continuityPrompt.stateIds,
                 }
               : undefined
-            if (continuityMetadata) {
-              metadata = {
-                ...metadata,
-                ...continuityMetadata,
-              }
+            metadata = {
+              ...metadata,
+              ...(continuityMetadata || {}),
+              runBudgetProfile: runBudgetPolicy.profile,
+              runMaxThinkingTokens: runBudgetPolicy.maxThinkingTokens,
+              runMaxTurns: runBudgetPolicy.maxTurns,
+              runMaxBudgetUsd: runBudgetPolicy.maxBudgetUsd,
+              runMcpMode: runBudgetPolicy.mcpMode,
+              historyCompacted: compactedHistory.compacted,
             }
 
             // Build prompt: if there are images, create an AsyncIterable<SDKUserMessage>
@@ -1521,6 +1735,8 @@ export const claudeRouter = router({
                 "[Ollama] Skipping MCP servers to speed up initialization",
               )
               mcpServersFiltered = undefined
+            } else if (runBudgetPolicy.mcpMode === "off") {
+              mcpServersFiltered = undefined
             } else {
               // Ensure MCP tokens are fresh (refresh if within 5 min of expiry)
               if (
@@ -1703,17 +1919,22 @@ ${prompt}
               console.log("[Ollama] Context prefix added to prompt")
             }
 
+            const terseOutputPolicy = runBudgetPolicy.terseOutput
+              ? "\n\n# Output Policy\nReturn compactly. Prefer patch/diff-first output and short checklists. Avoid long narrative unless asked."
+              : ""
+
             // System prompt config - use preset for both Claude and Ollama
             // If AGENTS.md exists, append its content to the system prompt
             const systemPromptConfig = agentsMdContent
               ? {
                   type: "preset" as const,
                   preset: "claude_code" as const,
-                  append: `\n\n# AGENTS.md\nThe following are the project's AGENTS.md instructions:\n\n${agentsMdContent}`,
+                  append: `\n\n# AGENTS.md\nThe following are the project's AGENTS.md instructions:\n\n${agentsMdContent}${terseOutputPolicy}`,
                 }
               : {
                   type: "preset" as const,
                   preset: "claude_code" as const,
+                  ...(terseOutputPolicy ? { append: terseOutputPolicy } : {}),
                 }
 
             const queryOptions = {
@@ -1740,6 +1961,10 @@ ${prompt}
                 ...(input.mode !== "plan" && {
                   allowDangerouslySkipPermissions: true,
                 }),
+                maxTurns: runBudgetPolicy.maxTurns,
+                maxBudgetUsd: runBudgetPolicy.maxBudgetUsd,
+                allowedTools: runBudgetPolicy.allowedTools,
+                includeMcpSchemas: runBudgetPolicy.includeMcpSchemas,
                 includePartialMessages: true,
                 // Load skills from project and user directories (skip for Ollama - not supported)
                 ...(!isUsingOllama && {
@@ -1826,6 +2051,38 @@ ${prompt}
                       toolInput.command = toolInput.cmd
                       delete toolInput.cmd
                       console.log("[Ollama] Fixed Bash tool: cmd -> command")
+                    }
+                  }
+
+                  const isMcpTool = toolName.startsWith("mcp__")
+                  if (isMcpTool) {
+                    if (runBudgetPolicy.mcpMode === "off") {
+                      return {
+                        behavior: "deny",
+                        message:
+                          "MCP tools are disabled for this run. Mention @[tool:<server>] to enable.",
+                      }
+                    }
+                    if (runBudgetPolicy.mcpMode === "explicit") {
+                      const normalizedMentions = toolMentions.map((mention) =>
+                        mention.toLowerCase(),
+                      )
+                      const normalizedToolName = toolName.toLowerCase()
+                      const allowedByMention = normalizedMentions.some((mention) =>
+                        normalizedToolName.includes(`mcp__${mention}__`),
+                      )
+                      if (!allowedByMention) {
+                        return {
+                          behavior: "deny",
+                          message:
+                            "This MCP tool is not in the explicit allowlist for the prompt.",
+                        }
+                      }
+                    }
+                  } else if (!runBudgetPolicy.allowedTools.includes(toolName)) {
+                    return {
+                      behavior: "deny",
+                      message: `Tool "${toolName}" is disabled in ${runBudgetPolicy.profile} profile.`,
                     }
                   }
 
@@ -1967,9 +2224,7 @@ ${prompt}
                 ...(!resumeSessionId && { continue: true }),
                 ...(resolvedModel && { model: resolvedModel }),
                 // fallbackModel: "claude-opus-4-5-20251101",
-                ...(input.maxThinkingTokens && {
-                  maxThinkingTokens: input.maxThinkingTokens,
-                }),
+                maxThinkingTokens: runBudgetPolicy.maxThinkingTokens,
               },
             }
 
@@ -2291,13 +2546,6 @@ ${prompt}
                         sdkMessageUuid: metadata.sdkMessageUuid,
                       }
                     }
-                    if (chunk.type === "message-metadata" && continuityMetadata) {
-                      chunk.messageMetadata = {
-                        ...chunk.messageMetadata,
-                        ...continuityMetadata,
-                      }
-                    }
-
                     // IMPORTANT: Defer the protocol "finish" chunk until after DB persistence.
                     // If we emit finish early, the UI can send the next user message before
                     // this assistant message is written, and the next save overwrites it.

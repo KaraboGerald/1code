@@ -220,8 +220,8 @@ export function AgentsPreferencesTab() {
               Extended Thinking
             </span>
             <span className="text-xs text-muted-foreground">
-              Enable deeper reasoning with more thinking tokens (uses more
-              credits).{" "}
+              Enable higher reasoning caps for complex tasks (backend budgets
+              still enforce run limits).{" "}
               <span className="text-foreground/70">Disables response streaming.</span>
             </span>
           </div>

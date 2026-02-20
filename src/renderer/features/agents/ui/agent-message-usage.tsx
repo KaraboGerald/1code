@@ -26,6 +26,12 @@ export interface AgentMessageMetadata {
     deltaPackId?: string
     planContractId?: string | null
   }
+  runBudgetProfile?: string
+  runMaxThinkingTokens?: number
+  runMaxTurns?: number
+  runMaxBudgetUsd?: number
+  runMcpMode?: string
+  historyCompacted?: boolean
 }
 
 interface AgentMessageUsageProps {
@@ -70,6 +76,12 @@ export const AgentMessageUsage = memo(function AgentMessageUsage({
     continuityCacheHit,
     continuityInjectedBytes = 0,
     continuityReusedPercent,
+    runBudgetProfile,
+    runMaxThinkingTokens,
+    runMaxTurns,
+    runMaxBudgetUsd,
+    runMcpMode,
+    historyCompacted,
   } = metadata
 
   const hasUsage =
@@ -166,6 +178,53 @@ export const AgentMessageUsage = memo(function AgentMessageUsage({
                   </span>
                 </div>
               )}
+            </div>
+          )}
+
+          {(runMaxThinkingTokens || runMaxTurns || runMaxBudgetUsd) && (
+            <div className="space-y-1 pt-1 border-t border-border/50">
+              <div className="flex justify-between text-xs gap-4">
+                <span className="text-muted-foreground">Run policy:</span>
+                <span className="font-mono text-foreground">
+                  {(runBudgetProfile || "default").replace(/-/g, " ")}
+                </span>
+              </div>
+              {runMaxThinkingTokens ? (
+                <div className="flex justify-between text-xs gap-4">
+                  <span className="text-muted-foreground">Think cap:</span>
+                  <span className="font-mono text-foreground">
+                    {runMaxThinkingTokens.toLocaleString()}
+                  </span>
+                </div>
+              ) : null}
+              {runMaxTurns ? (
+                <div className="flex justify-between text-xs gap-4">
+                  <span className="text-muted-foreground">Turn cap:</span>
+                  <span className="font-mono text-foreground">
+                    {runMaxTurns}
+                  </span>
+                </div>
+              ) : null}
+              {runMaxBudgetUsd ? (
+                <div className="flex justify-between text-xs gap-4">
+                  <span className="text-muted-foreground">Budget cap:</span>
+                  <span className="font-mono text-foreground">
+                    ${runMaxBudgetUsd.toFixed(2)}
+                  </span>
+                </div>
+              ) : null}
+              {runMcpMode ? (
+                <div className="flex justify-between text-xs gap-4">
+                  <span className="text-muted-foreground">MCP mode:</span>
+                  <span className="font-mono text-foreground">{runMcpMode}</span>
+                </div>
+              ) : null}
+              {historyCompacted ? (
+                <div className="flex justify-between text-xs gap-4">
+                  <span className="text-muted-foreground">History:</span>
+                  <span className="font-mono text-foreground">compacted</span>
+                </div>
+              ) : null}
             </div>
           )}
         </div>

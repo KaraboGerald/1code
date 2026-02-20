@@ -162,10 +162,6 @@ export class IPCChatTransport implements ChatTransport<UIMessage> {
 
     // Read extended thinking setting dynamically (so toggle applies to existing chats)
     const thinkingEnabled = appStore.get(extendedThinkingEnabledAtom)
-    // Max thinking tokens for extended thinking mode
-    // SDK adds +1 internally, so 64000 becomes 64001 which exceeds Opus 4.5 limit
-    // Using 32000 to stay safely under the 64000 max output tokens limit
-    const maxThinkingTokens = thinkingEnabled ? 32_000 : undefined
     const historyEnabled = appStore.get(historyEnabledAtom)
     const enableTasks = appStore.get(enableTasksAtom)
 
@@ -190,6 +186,13 @@ export class IPCChatTransport implements ChatTransport<UIMessage> {
         .getState()
         .allSubChats.find((subChat) => subChat.id === this.config.subChatId)
         ?.mode || this.config.mode
+
+    // Frontend sends a mode-aware hint; backend still enforces final run budget policy.
+    const maxThinkingTokens = thinkingEnabled
+      ? currentMode === "plan"
+        ? 12_000
+        : 6_000
+      : undefined
 
     // Stream debug logging
     const subId = this.config.subChatId.slice(-8)

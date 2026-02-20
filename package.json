@@ -13,7 +13,16 @@
     "build": "electron-vite build",
     "preview": "electron-vite preview",
     "package": "electron-builder --dir",
-    "package:mac": "electron-builder --mac",
+    "package:mac": "npm run codex:prepare-acp && electron-builder --mac --arm64",
+    "package:mac:m1": "npm run codex:prepare-acp && electron-builder --mac --arm64 --config electron-builder-m1.yml",
+    "package:mac:dmg": "npm run codex:prepare-acp && electron-builder --mac zip --arm64 && node scripts/build-dmg-m1.mjs",
+    "package:mac:safe": "./scripts/build-mac-resilient.sh",
+    "dmg:build": "node scripts/dmg-builder-advanced.mjs",
+    "dmg:async": "node scripts/dmg-builder-advanced.mjs --async",
+    "dmg:status": "node scripts/dmg-builder-advanced.mjs --status=all",
+    "dmg:monitor": "node scripts/dmg-monitor.mjs",
+    "dmg:dashboard": "node scripts/build-dashboard.mjs",
+    "dmg:reset": "node scripts/build-dashboard.mjs --reset",
     "package:win": "electron-builder --win",
     "package:linux": "electron-builder --linux",
     "dist": "electron-builder",
@@ -23,8 +32,9 @@
     "claude:download:all": "node scripts/download-claude-binary.mjs --version=2.1.45 --all",
     "codex:download": "node scripts/download-codex-binary.mjs --version=0.98.0",
     "codex:download:all": "node scripts/download-codex-binary.mjs --version=0.98.0 --all",
-    "release": "rm -rf release && bun i && bun run claude:download && bun run codex:download && bun run build && bun run package:mac && bun run dist:manifest && ./scripts/upload-release-wrangler.sh",
-    "release:dev": "rm -rf release && bun run claude:download && bun run codex:download && bun run build && bun run package:mac && rm -rf node_modules && bun i",
+    "codex:prepare-acp": "node scripts/prepare-codex-acp-binary.mjs",
+    "release": "rm -rf release && bun i && bun run claude:download && bun run codex:download && bun run codex:prepare-acp && bun run build && bun run package:mac && bun run dist:manifest && ./scripts/upload-release-wrangler.sh",
+    "release:dev": "rm -rf release && bun run claude:download && bun run codex:download && bun run codex:prepare-acp && bun run build && bun run package:mac && rm -rf node_modules && bun i",
     "sync:public": "./scripts/sync-to-public.sh",
     "icon:generate": "node scripts/generate-icon.mjs",
     "db:generate": "drizzle-kit generate",
@@ -140,7 +150,9 @@
     "postcss": "^8.5.1",
     "tailwindcss": "^3.4.17",
     "typescript": "^5.4.5",
-    "vite": "^6.3.4"
+    "vite": "^6.3.4",
+    "create-dmg": "^7.0.0",
+    "p-queue": "^8.0.1"
   },
   "build": {
     "appId": "dev.21st.agents",
@@ -192,15 +204,13 @@
         {
           "target": "dmg",
           "arch": [
-            "arm64",
-            "x64"
+            "arm64"
           ]
         },
         {
           "target": "zip",
           "arch": [
-            "arm64",
-            "x64"
+            "arm64"
           ]
         }
       ],

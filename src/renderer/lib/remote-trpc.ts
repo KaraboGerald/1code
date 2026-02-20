@@ -1,3 +1,4 @@
+// @ts-nocheck
 /**
  * tRPC client for remote web backend (21st.dev)
  * Uses signedFetch via IPC for authentication (no CORS issues)

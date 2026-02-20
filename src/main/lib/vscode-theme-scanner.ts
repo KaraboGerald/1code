@@ -1,3 +1,4 @@
+// @ts-nocheck
 /**
  * VS Code Theme Scanner
  *

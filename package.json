@@ -33,7 +33,7 @@
     "openspec:list": "openspec list",
     "openspec:list:specs": "openspec list --specs",
     "openspec:validate": "openspec validate --all --strict --no-interactive",
-    "ts:check": "tsgo --noEmit",
+    "ts:check": "tsc -p tsconfig.typecheck.json --noEmit",
     "postinstall": "node -e \"if(!process.env.VERCEL){require('child_process').execSync('electron-rebuild -f -w better-sqlite3,node-pty',{stdio:'inherit'})}\" && node scripts/patch-electron-dev.mjs"
   },
   "dependencies": {

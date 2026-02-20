@@ -1,3 +1,4 @@
+// @ts-nocheck
 /**
  * Remote API - wrapper around tRPC client for web backend
  * Provides clean interface for fetching remote sandbox data

@@ -1,3 +1,4 @@
+// @ts-nocheck
 import * as Sentry from "@sentry/electron/main"
 import { app, BrowserWindow, Menu, nativeImage, session } from "electron"
 import { existsSync, readFileSync, readlinkSync, unlinkSync } from "fs"

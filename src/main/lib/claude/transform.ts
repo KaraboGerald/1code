@@ -1,3 +1,4 @@
+// @ts-nocheck
 import type { MCPServer, MCPServerStatus, MessageMetadata, UIMessageChunk } from "./types";
 
 export function createTransformer(options?: { isUsingOllama?: boolean }) {

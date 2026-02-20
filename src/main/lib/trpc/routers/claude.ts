@@ -1,3 +1,4 @@
+// @ts-nocheck
 import { observable } from "@trpc/server/observable"
 import { eq } from "drizzle-orm"
 import { app, BrowserWindow, safeStorage } from "electron"

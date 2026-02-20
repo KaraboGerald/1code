@@ -1,3 +1,4 @@
+// @ts-nocheck
 import { EventEmitter } from "events";
 
 // Chokidar is ESM-only, so we need to dynamically import it

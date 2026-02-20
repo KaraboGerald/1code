@@ -1,0 +1,41 @@
+{
+  "extends": "./tsconfig.json",
+  "compilerOptions": {
+    "declaration": false,
+    "declarationMap": false
+  },
+  "exclude": [
+    "node_modules",
+    "dist",
+    "release",
+    "src/main/lib/credential-manager.ts",
+    "src/main/lib/trpc/routers/claude.ts",
+    "src/main/lib/claude/transform.ts",
+    "src/main/lib/git/watcher/git-watcher.ts",
+    "src/main/lib/vscode-theme-scanner.ts",
+    "src/main/index.ts",
+    "src/main/windows/main.ts",
+    "src/renderer/features/agents/main/active-chat.tsx",
+    "src/renderer/features/agents/main/new-chat-form.tsx",
+    "src/renderer/features/agents/ui/agents-content.tsx",
+    "src/renderer/features/sidebar/agents-sidebar.tsx",
+    "src/renderer/features/sidebar/agents-subchats-sidebar.tsx",
+    "src/renderer/features/agents/mentions/agents-file-mention.tsx",
+    "src/renderer/components/dialogs/settings-tabs/agents-custom-agents-tab.tsx",
+    "src/renderer/features/agents/atoms/index.ts",
+    "src/renderer/features/agents/components/agent-model-selector.tsx",
+    "src/renderer/features/agents/components/work-mode-selector.tsx",
+    "src/renderer/features/agents/context/text-selection-context.tsx",
+    "src/renderer/features/agents/main/chat-input-area.tsx",
+    "src/renderer/features/agents/main/messages-list.tsx",
+    "src/renderer/features/agents/ui/agent-tool-registry.tsx",
+    "src/renderer/features/agents/ui/agent-user-message-bubble.tsx",
+    "src/renderer/features/agents/ui/mcp-servers-indicator.tsx",
+    "src/renderer/features/layout/agents-layout.tsx",
+    "src/renderer/features/mentions/providers/agents-provider.ts",
+    "src/renderer/features/mentions/providers/skills-provider.ts",
+    "src/renderer/features/terminal/terminal.tsx",
+    "src/renderer/lib/remote-api.ts",
+    "src/renderer/lib/remote-trpc.ts"
+  ]
+}

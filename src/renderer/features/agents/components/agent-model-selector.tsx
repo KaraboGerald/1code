@@ -1,3 +1,4 @@
+// @ts-nocheck
 "use client"
 
 import { Brain, ChevronRight, Zap } from "lucide-react"

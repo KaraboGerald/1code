@@ -1453,12 +1453,16 @@ export const codexRouter = router({
             const effectivePrompt = continuityPrompt?.prompt || input.prompt
             const continuityInjectedBytes =
               continuityPrompt
-                ? Math.max(
-                    Buffer.byteLength(effectivePrompt, "utf8") -
-                      Buffer.byteLength(input.prompt, "utf8"),
-                    0,
-                  )
+                ? continuityPrompt.injectedBytes
                 : 0
+            const continuityMetadata = continuityPrompt
+              ? {
+                  continuityCacheHit: continuityPrompt.cacheHit,
+                  continuityInjectedBytes: continuityPrompt.injectedBytes,
+                  continuityReusedPercent: continuityPrompt.reusedPercent,
+                  continuityStateIds: continuityPrompt.stateIds,
+                }
+              : undefined
 
             if (!isDuplicatePrompt) {
               const userMessage = {
@@ -1544,6 +1548,7 @@ export const codexRouter = router({
                     totalTokens: part.totalUsage.totalTokens,
                     durationMs: Date.now() - startedAt,
                     resultSubtype: part.finishReason === "error" ? "error" : "success",
+                    ...(continuityMetadata || {}),
                   }
                 }
 
@@ -1551,10 +1556,14 @@ export const codexRouter = router({
                   return {
                     model: metadataModel,
                     sessionId,
+                    ...(continuityMetadata || {}),
                   }
                 }
 
-                return { model: metadataModel }
+                return {
+                  model: metadataModel,
+                  ...(continuityMetadata || {}),
+                }
               },
               onFinish: ({ responseMessage, isContinuation }) => {
                 try {

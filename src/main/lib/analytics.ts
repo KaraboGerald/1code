@@ -364,6 +364,7 @@ export function trackContinuityPackMetrics(data: {
   cacheHit: boolean
   packBytes: number
   injectedBytes: number
+  reusedPercent?: number
 }) {
   capture("continuity_pack_metrics", {
     provider: data.provider,
@@ -371,6 +372,7 @@ export function trackContinuityPackMetrics(data: {
     cache_hit: data.cacheHit,
     pack_bytes: data.packBytes,
     injected_bytes: data.injectedBytes,
+    reused_percent: data.reusedPercent,
   })
 }
 

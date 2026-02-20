@@ -124,6 +124,8 @@ import { ChevronDown } from "lucide-react"
 import { Switch } from "../../ui/switch"
 import { trpc } from "../../../lib/trpc"
 
+type ContinuityTokenMode = "low" | "normal" | "debug"
+
 // Hook to detect narrow screen
 function useIsNarrowScreen(): boolean {
   const [isNarrow, setIsNarrow] = useState(false)
@@ -164,10 +166,28 @@ export function AgentsPreferencesTab() {
         refetchCoAuthoredBy()
       },
     })
+  const { data: continuitySettings, refetch: refetchContinuitySettings } =
+    trpc.continuitySettings.get.useQuery()
+  const updateContinuitySettingsMutation =
+    trpc.continuitySettings.update.useMutation({
+      onSuccess: () => {
+        refetchContinuitySettings()
+      },
+    })
 
   const handleCoAuthoredByToggle = (enabled: boolean) => {
     setCoAuthoredByMutation.mutate({ enabled })
   }
+
+  const handleTokenModeChange = (tokenMode: ContinuityTokenMode) => {
+    updateContinuitySettingsMutation.mutate({ tokenMode })
+  }
+  const continuityTokenMode: ContinuityTokenMode =
+    continuitySettings?.tokenMode === "low" ||
+    continuitySettings?.tokenMode === "normal" ||
+    continuitySettings?.tokenMode === "debug"
+      ? continuitySettings.tokenMode
+      : "normal"
 
   // Sync opt-out status to main process
   const handleAnalyticsToggle = async (optedOut: boolean) => {
@@ -248,6 +268,40 @@ export function AgentsPreferencesTab() {
             onCheckedChange={handleCoAuthoredByToggle}
             disabled={setCoAuthoredByMutation.isPending}
           />
+        </div>
+        <div className="flex items-center justify-between p-4 border-t border-border">
+          <div className="flex flex-col space-y-1">
+            <span className="text-sm font-medium text-foreground">
+              Token Mode
+            </span>
+            <span className="text-xs text-muted-foreground">
+              Controls continuity context budget (Low saves tokens, Debug sends more context)
+            </span>
+          </div>
+          <Select
+            value={continuityTokenMode}
+            onValueChange={(value: ContinuityTokenMode) =>
+              handleTokenModeChange(value)
+            }
+          >
+            <SelectTrigger
+              className="w-auto px-2"
+              disabled={updateContinuitySettingsMutation.isPending}
+            >
+              <span className="text-xs">
+                {continuityTokenMode === "low"
+                  ? "Low"
+                  : continuityTokenMode === "debug"
+                    ? "Debug"
+                    : "Normal"}
+              </span>
+            </SelectTrigger>
+            <SelectContent>
+              <SelectItem value="low">Low</SelectItem>
+              <SelectItem value="normal">Normal</SelectItem>
+              <SelectItem value="debug">Debug</SelectItem>
+            </SelectContent>
+          </Select>
         </div>
       </div>
 

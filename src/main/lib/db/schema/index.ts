@@ -206,6 +206,7 @@ export const continuitySettings = sqliteTable("continuity_settings", {
   })
     .notNull()
     .default(false),
+  tokenMode: text("token_mode").notNull().default("normal"),
   memoryBranch: text("memory_branch").notNull().default("memory/continuity"),
   updatedAt: integer("updated_at", { mode: "timestamp" }).$defaultFn(
     () => new Date(),

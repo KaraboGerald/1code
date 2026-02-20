@@ -1097,12 +1097,22 @@ export const claudeRouter = router({
             const effectivePrompt = continuityPrompt?.prompt || finalPrompt
             const continuityInjectedBytes =
               continuityPrompt
-                ? Math.max(
-                    Buffer.byteLength(effectivePrompt, "utf8") -
-                      Buffer.byteLength(finalPrompt, "utf8"),
-                    0,
-                  )
+                ? continuityPrompt.injectedBytes
                 : 0
+            const continuityMetadata = continuityPrompt
+              ? {
+                  continuityCacheHit: continuityPrompt.cacheHit,
+                  continuityInjectedBytes: continuityPrompt.injectedBytes,
+                  continuityReusedPercent: continuityPrompt.reusedPercent,
+                  continuityStateIds: continuityPrompt.stateIds,
+                }
+              : undefined
+            if (continuityMetadata) {
+              metadata = {
+                ...metadata,
+                ...continuityMetadata,
+              }
+            }
 
             // Build prompt: if there are images, create an AsyncIterable<SDKUserMessage>
             // Otherwise use simple string prompt
@@ -2278,6 +2288,12 @@ ${prompt}
                       chunk.messageMetadata = {
                         ...chunk.messageMetadata,
                         sdkMessageUuid: metadata.sdkMessageUuid,
+                      }
+                    }
+                    if (chunk.type === "message-metadata" && continuityMetadata) {
+                      chunk.messageMetadata = {
+                        ...chunk.messageMetadata,
+                        ...continuityMetadata,
                       }
                     }
 

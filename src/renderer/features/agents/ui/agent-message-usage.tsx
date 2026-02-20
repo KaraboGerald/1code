@@ -17,6 +17,15 @@ export interface AgentMessageMetadata {
   finalTextId?: string
   durationMs?: number
   resultSubtype?: string
+  continuityCacheHit?: boolean
+  continuityInjectedBytes?: number
+  continuityReusedPercent?: number
+  continuityStateIds?: {
+    anchorPackId?: string
+    contextPackId?: string
+    deltaPackId?: string
+    planContractId?: string | null
+  }
 }
 
 interface AgentMessageUsageProps {
@@ -58,13 +67,26 @@ export const AgentMessageUsage = memo(function AgentMessageUsage({
     totalTokens = 0,
     durationMs,
     resultSubtype,
+    continuityCacheHit,
+    continuityInjectedBytes = 0,
+    continuityReusedPercent,
   } = metadata
 
-  const hasUsage = inputTokens > 0 || outputTokens > 0
+  const hasUsage =
+    inputTokens > 0 ||
+    outputTokens > 0 ||
+    continuityInjectedBytes > 0 ||
+    typeof continuityReusedPercent === "number"
 
   if (!hasUsage) return null
 
   const displayTokens = totalTokens || inputTokens + outputTokens
+  const compactBadgeText =
+    displayTokens > 0
+      ? formatTokens(displayTokens)
+      : typeof continuityReusedPercent === "number"
+        ? `ctx ${Math.round(continuityReusedPercent)}%`
+        : "ctx"
 
   return (
     <HoverCard openDelay={400} closeDelay={100}>
@@ -77,7 +99,7 @@ export const AgentMessageUsage = memo(function AgentMessageUsage({
             "transition-[background-color,transform] duration-150 ease-out",
           )}
         >
-          <span className="font-mono">{formatTokens(displayTokens)}</span>
+          <span className="font-mono">{compactBadgeText}</span>
         </button>
       </HoverCardTrigger>
       <HoverCardContent
@@ -110,12 +132,40 @@ export const AgentMessageUsage = memo(function AgentMessageUsage({
           )}
 
           {/* Tokens group */}
-          {displayTokens > 0 && (
-            <div className="flex justify-between text-xs gap-4 pt-1.5 mt-1 border-t border-border/50">
-              <span className="text-muted-foreground">Tokens:</span>
-              <span className="font-mono font-medium text-foreground">
-                {displayTokens.toLocaleString()}
-              </span>
+          <div className="flex justify-between text-xs gap-4 pt-1.5 mt-1 border-t border-border/50">
+            <span className="text-muted-foreground">Tokens:</span>
+            <span className="font-mono font-medium text-foreground">
+              {displayTokens.toLocaleString()}
+            </span>
+          </div>
+
+          {(typeof continuityReusedPercent === "number" ||
+            continuityInjectedBytes > 0) && (
+            <div className="space-y-1 pt-1 border-t border-border/50">
+              {typeof continuityReusedPercent === "number" && (
+                <div className="flex justify-between text-xs gap-4">
+                  <span className="text-muted-foreground">Context reuse:</span>
+                  <span className="font-mono text-foreground">
+                    {Math.round(continuityReusedPercent)}%
+                  </span>
+                </div>
+              )}
+              {continuityInjectedBytes > 0 && (
+                <div className="flex justify-between text-xs gap-4">
+                  <span className="text-muted-foreground">Injected bytes:</span>
+                  <span className="font-mono text-foreground">
+                    {continuityInjectedBytes.toLocaleString()}
+                  </span>
+                </div>
+              )}
+              {typeof continuityCacheHit === "boolean" && (
+                <div className="flex justify-between text-xs gap-4">
+                  <span className="text-muted-foreground">Pack cache:</span>
+                  <span className="font-mono text-foreground">
+                    {continuityCacheHit ? "hit" : "miss"}
+                  </span>
+                </div>
+              )}
             </div>
           )}
         </div>

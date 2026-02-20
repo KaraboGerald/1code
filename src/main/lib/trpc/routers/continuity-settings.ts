@@ -4,6 +4,7 @@ import { continuitySettings, getDatabase } from "../../db"
 import {
   getDefaultContinuityArtifactPolicy,
   getDefaultContinuityMemoryBranch,
+  getContinuityTokenMode,
 } from "../../config"
 import { publicProcedure, router } from "../index"
 
@@ -11,6 +12,7 @@ const continuityPolicySchema = z.enum([
   "auto-write-manual-commit",
   "auto-write-memory-branch",
 ])
+const continuityTokenModeSchema = z.enum(["low", "normal", "debug"])
 
 function ensureSettingsRow() {
   const db = getDatabase()
@@ -30,6 +32,7 @@ function ensureSettingsRow() {
       id: "singleton",
       artifactPolicy: getDefaultContinuityArtifactPolicy(),
       autoCommitToMemoryBranch: false,
+      tokenMode: getContinuityTokenMode(),
       memoryBranch: getDefaultContinuityMemoryBranch(),
       updatedAt: new Date(),
     })
@@ -47,6 +50,7 @@ export const continuitySettingsRouter = router({
       z.object({
         artifactPolicy: continuityPolicySchema.optional(),
         autoCommitToMemoryBranch: z.boolean().optional(),
+        tokenMode: continuityTokenModeSchema.optional(),
         memoryBranch: z.string().min(1).optional(),
       }),
     )
@@ -57,6 +61,7 @@ export const continuitySettingsRouter = router({
         artifactPolicy: input.artifactPolicy ?? current.artifactPolicy,
         autoCommitToMemoryBranch:
           input.autoCommitToMemoryBranch ?? current.autoCommitToMemoryBranch,
+        tokenMode: input.tokenMode ?? current.tokenMode ?? getContinuityTokenMode(),
         memoryBranch: (input.memoryBranch ?? current.memoryBranch).trim(),
       }
 
@@ -65,6 +70,7 @@ export const continuitySettingsRouter = router({
         .set({
           artifactPolicy: next.artifactPolicy,
           autoCommitToMemoryBranch: next.autoCommitToMemoryBranch,
+          tokenMode: next.tokenMode,
           memoryBranch: next.memoryBranch || getDefaultContinuityMemoryBranch(),
           updatedAt: new Date(),
         })

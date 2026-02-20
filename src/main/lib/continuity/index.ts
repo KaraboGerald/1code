@@ -17,11 +17,14 @@ import {
   subChats,
 } from "../db"
 import {
+  getContinuityBudgetProfile,
   getContinuityGovernorCapabilities,
   getContinuityMode,
+  getContinuityTokenMode,
   getDefaultContinuityArtifactPolicy,
   getDefaultContinuityMemoryBranch,
   type ContinuityArtifactPolicy,
+  type ContinuityTokenMode,
 } from "../config"
 import {
   trackContinuityGovernorAction,
@@ -46,6 +49,14 @@ type ContinuityInput = {
 type ContinuityOutput = {
   prompt: string
   cacheHit: boolean
+  injectedBytes: number
+  reusedPercent: number
+  stateIds: {
+    anchorPackId: string
+    contextPackId: string
+    deltaPackId: string
+    planContractId: string | null
+  }
 }
 
 type RunOutcomeInput = {
@@ -70,6 +81,7 @@ type GovernorDecision = {
 type SafeguardSettings = {
   artifactPolicy: ContinuityArtifactPolicy
   autoCommitToMemoryBranch: boolean
+  tokenMode: ContinuityTokenMode
   memoryBranch: string
 }
 
@@ -91,12 +103,12 @@ type CachedFileSummary = {
 type SubChatState = {
   lastChangedFilesHash: string
 }
+type ProtocolState = {
+  lastCacheKey: string | null
+}
 
 const SEARCH_TTL_MS = 60_000
-const MAX_FILE_READ_BYTES = 180_000
 const MAX_SUMMARY_LINES = 12
-const MAX_CONTEXT_FILES = 8
-const CONTINUITY_BUDGET_BYTES = 24_000
 const DEVLOG_DIFF_THRESHOLD = 120
 const DEVLOG_FILE_THRESHOLD = 6
 const REHYDRATE_TURN_THRESHOLD = 12
@@ -210,11 +222,26 @@ class ContinuityService {
   private fileSummaryCache = new Map<string, CachedFileSummary>()
   private contextPackCache = new Map<string, string>()
   private subChatState = new Map<string, SubChatState>()
+  private protocolState = new Map<string, ProtocolState>()
 
   async apply(input: ContinuityInput): Promise<ContinuityOutput> {
     const continuityMode = getContinuityMode()
+    const tokenMode = await this.getConfiguredTokenMode()
+    const budget = getContinuityBudgetProfile(tokenMode)
+    const fallbackStateIds = {
+      anchorPackId: "none",
+      contextPackId: "none",
+      deltaPackId: "none",
+      planContractId: input.mode === "plan" ? sha(normalizePrompt(input.prompt)) : null,
+    }
     if (continuityMode === "off") {
-      return { prompt: input.prompt, cacheHit: false }
+      return {
+        prompt: input.prompt,
+        cacheHit: false,
+        injectedBytes: 0,
+        reusedPercent: 100,
+        stateIds: fallbackStateIds,
+      }
     }
 
     const repoRoot = input.projectPath || input.cwd
@@ -226,43 +253,111 @@ class ContinuityService {
       repoState.headCommit,
       input.provider,
       input.mode,
-      String(CONTINUITY_BUDGET_BYTES),
+      String(budget.maxPackBytes),
     ].join(":")
+    const objectiveLine = input.prompt.split("\n").find((line) => line.trim().length > 0)?.trim() || input.prompt.trim()
+    const anchorPackId = sha(`${repoRoot}:anchor:${repoState.headCommit}`)
+    const contextPackId = sha(cacheKey)
+    const planContractId = input.mode === "plan" ? sha(normalizePrompt(input.prompt)) : null
 
     const cached = await this.getCachedPack(cacheKey)
+    const deltaPack = await this.buildDeltaPack(input.subChatId, repoRoot, repoState, input.prompt)
+    const deltaPackId = sha(deltaPack)
+    const stateIds = { anchorPackId, contextPackId, deltaPackId, planContractId }
+    const previous = this.protocolState.get(input.subChatId)
+    const canUseDeltaOnly = previous?.lastCacheKey === cacheKey
+
+    const deltaOnlyEnvelope = [
+      "[1CODE_CONTINUITY_STATE_IDS]",
+      `anchorPackId: ${anchorPackId}`,
+      `contextPackId: ${contextPackId}`,
+      `deltaPackId: ${deltaPackId}`,
+      `planContractId: ${planContractId || "none"}`,
+      "",
+      "[1CODE_CONTINUITY_DELTA]",
+      deltaPack,
+      "",
+      "[1CODE_OBJECTIVE]",
+      clampByBytes(objectiveLine, 240),
+      "",
+      "[1CODE_USER_REQUEST]",
+    ].join("\n")
+
     if (cached) {
-      const injectedBytes = Buffer.byteLength(cached, "utf8")
+      const fullPrompt = `${cached}\n\n${input.prompt}`
+      const deltaOnlyPrompt = `${deltaOnlyEnvelope}\n\n${input.prompt}`
+      const selectedPrompt = canUseDeltaOnly ? deltaOnlyPrompt : fullPrompt
+      const injectedBytes = Math.max(
+        Buffer.byteLength(selectedPrompt, "utf8") -
+          Buffer.byteLength(input.prompt, "utf8"),
+        0,
+      )
+      const reusedPercent = canUseDeltaOnly ? 95 : 75
       trackContinuityPackMetrics({
         provider: input.provider,
         mode: input.mode,
         cacheHit: true,
-        packBytes: injectedBytes,
+        packBytes: Buffer.byteLength(selectedPrompt, "utf8"),
         injectedBytes,
+        reusedPercent,
       })
+      this.protocolState.set(input.subChatId, { lastCacheKey: cacheKey })
       if (continuityMode === "passive") {
-        return { prompt: input.prompt, cacheHit: true }
+        return {
+          prompt: input.prompt,
+          cacheHit: true,
+          injectedBytes: 0,
+          reusedPercent,
+          stateIds,
+        }
       }
-      return { prompt: `${cached}\n\n${input.prompt}`, cacheHit: true }
+      return {
+        prompt: selectedPrompt,
+        cacheHit: true,
+        injectedBytes,
+        reusedPercent,
+        stateIds,
+      }
     }
 
     const anchorPack = await this.buildAnchorPack(repoRoot)
-    const contextPack = await this.buildContextPack(repoRoot, repoState, input.prompt)
-    const deltaPack = await this.buildDeltaPack(input.subChatId, repoState)
+    const contextPack = await this.buildContextPack(
+      repoRoot,
+      repoState,
+      input.prompt,
+      budget,
+    )
+    const planContract =
+      input.mode === "plan"
+        ? `id: ${planContractId}\nmax_steps: 6\nobjective: ${clampByBytes(objectiveLine, 200)}\nformat: compact-structured`
+        : ""
 
     const composite = [
+      "[1CODE_CONTINUITY_STATE_IDS]",
+      `anchorPackId: ${anchorPackId}`,
+      `contextPackId: ${contextPackId}`,
+      `deltaPackId: ${deltaPackId}`,
+      `planContractId: ${planContractId || "none"}`,
+      "",
       "[1CODE_CONTINUITY_ANCHOR]",
       anchorPack,
       "",
       "[1CODE_CONTINUITY_CONTEXT]",
       contextPack,
       "",
+      ...(input.mode === "plan"
+        ? ["[1CODE_PLAN_CONTRACT]", planContract, ""]
+        : []),
       "[1CODE_CONTINUITY_DELTA]",
       deltaPack,
+      "",
+      "[1CODE_OBJECTIVE]",
+      clampByBytes(objectiveLine, 240),
       "",
       "[1CODE_USER_REQUEST]",
     ].join("\n")
 
-    const budgeted = clampByBytes(composite, CONTINUITY_BUDGET_BYTES)
+    const budgeted = clampByBytes(composite, budget.maxPackBytes)
     await this.storeCachedPack({
       key: cacheKey,
       taskFingerprint,
@@ -270,25 +365,41 @@ class ContinuityService {
       headCommit: repoState.headCommit,
       provider: input.provider,
       mode: input.mode,
-      budgetBytes: CONTINUITY_BUDGET_BYTES,
+      budgetBytes: budget.maxPackBytes,
       pack: budgeted,
     })
     await this.storeSubChatState(input.subChatId, repoState.changedFilesHash, budgeted)
-    const injectedBytes = Buffer.byteLength(budgeted, "utf8")
+    this.protocolState.set(input.subChatId, { lastCacheKey: cacheKey })
+    const injectedBytes = Math.max(
+      Buffer.byteLength(`${budgeted}\n\n${input.prompt}`, "utf8") -
+        Buffer.byteLength(input.prompt, "utf8"),
+      0,
+    )
+    const reusedPercent = 35
     trackContinuityPackMetrics({
       provider: input.provider,
       mode: input.mode,
       cacheHit: false,
-      packBytes: injectedBytes,
+      packBytes: Buffer.byteLength(budgeted, "utf8"),
       injectedBytes,
+      reusedPercent,
     })
     if (continuityMode === "passive") {
-      return { prompt: input.prompt, cacheHit: false }
+      return {
+        prompt: input.prompt,
+        cacheHit: false,
+        injectedBytes: 0,
+        reusedPercent,
+        stateIds,
+      }
     }
 
     return {
       prompt: `${budgeted}\n\n${input.prompt}`,
       cacheHit: false,
+      injectedBytes,
+      reusedPercent,
+      stateIds,
     }
   }
 
@@ -576,6 +687,11 @@ class ContinuityService {
     repoRoot: string,
     repoState: RepoState,
     prompt: string,
+    budget: {
+      maxContextFiles: number
+      maxContextSummaryBytes: number
+      maxFileReadBytes: number
+    },
   ): Promise<string> {
     const keywords = extractKeywords(prompt)
     const searchHits = await this.searchRelevantFiles(repoRoot, keywords, repoState.headCommit)
@@ -584,33 +700,71 @@ class ContinuityService {
       ...repoState.changedFiles.slice(0, 4),
       ...searchHits,
     ]
-    const uniqueFiles = [...new Set(candidateFiles)].slice(0, MAX_CONTEXT_FILES)
+    const uniqueFiles = [...new Set(candidateFiles)].slice(0, budget.maxContextFiles)
     if (uniqueFiles.length === 0) {
       return "No relevant files identified."
     }
 
     const summaries: string[] = []
+    let totalBytes = 0
     for (const filePath of uniqueFiles) {
-      const summary = await this.readSummary(repoRoot, filePath)
+      const summary = await this.readSummary(
+        repoRoot,
+        filePath,
+        budget.maxFileReadBytes,
+      )
       if (summary) {
+        const nextBytes = Buffer.byteLength(summary, "utf8")
+        if (totalBytes + nextBytes > budget.maxContextSummaryBytes) {
+          break
+        }
         summaries.push(summary)
+        totalBytes += nextBytes
       }
     }
 
     return summaries.join("\n\n---\n\n")
   }
 
-  private async buildDeltaPack(subChatId: string, repoState: RepoState): Promise<string> {
+  private async buildDeltaPack(
+    subChatId: string,
+    repoRoot: string,
+    repoState: RepoState,
+    prompt: string,
+  ): Promise<string> {
+    const diffSnippet = await this.getDiffSnippet(repoRoot)
+    const failingTestDigest = await this.getLatestFailingTestDigest(subChatId)
+    const objective = prompt.split("\n").find((line) => line.trim().length > 0)?.trim() || prompt.trim()
     const previous = await this.getSubChatState(subChatId)
     if (!previous) {
-      return `first_run: true\nchanged_files: ${repoState.changedFiles.slice(0, 20).join(", ") || "none"}`
+      return [
+        "first_run: true",
+        `objective: ${clampByBytes(objective, 200)}`,
+        `changed_files: ${repoState.changedFiles.slice(0, 20).join(", ") || "none"}`,
+        `failing_test_digest: ${failingTestDigest || "none"}`,
+        "",
+        "[DIFF_SNIPPET]",
+        diffSnippet || "none",
+      ].join("\n")
     }
 
     if (previous.lastChangedFilesHash === repoState.changedFilesHash) {
-      return "repo_delta: unchanged"
+      return [
+        "repo_delta: unchanged",
+        `objective: ${clampByBytes(objective, 200)}`,
+        `failing_test_digest: ${failingTestDigest || "none"}`,
+      ].join("\n")
     }
 
-    return `repo_delta: changed\nchanged_files: ${repoState.changedFiles.slice(0, 20).join(", ") || "none"}`
+    return [
+      "repo_delta: changed",
+      `objective: ${clampByBytes(objective, 200)}`,
+      `changed_files: ${repoState.changedFiles.slice(0, 20).join(", ") || "none"}`,
+      `failing_test_digest: ${failingTestDigest || "none"}`,
+      "",
+      "[DIFF_SNIPPET]",
+      diffSnippet || "none",
+    ].join("\n")
   }
 
   private async getSubChatState(subChatId: string): Promise<SubChatState | null> {
@@ -734,6 +888,7 @@ class ContinuityService {
     const fallback: SafeguardSettings = {
       artifactPolicy: getDefaultContinuityArtifactPolicy(),
       autoCommitToMemoryBranch: false,
+      tokenMode: getContinuityTokenMode(),
       memoryBranch: getDefaultContinuityMemoryBranch(),
     }
 
@@ -743,6 +898,7 @@ class ContinuityService {
         .select({
           artifactPolicy: continuitySettings.artifactPolicy,
           autoCommitToMemoryBranch: continuitySettings.autoCommitToMemoryBranch,
+          tokenMode: continuitySettings.tokenMode,
           memoryBranch: continuitySettings.memoryBranch,
         })
         .from(continuitySettings)
@@ -755,6 +911,7 @@ class ContinuityService {
             id: "singleton",
             artifactPolicy: fallback.artifactPolicy,
             autoCommitToMemoryBranch: false,
+            tokenMode: fallback.tokenMode,
             memoryBranch: fallback.memoryBranch,
             updatedAt: new Date(),
           })
@@ -768,8 +925,36 @@ class ContinuityService {
             ? "auto-write-memory-branch"
             : "auto-write-manual-commit",
         autoCommitToMemoryBranch: !!row.autoCommitToMemoryBranch,
+        tokenMode:
+          row.tokenMode === "low" ||
+          row.tokenMode === "normal" ||
+          row.tokenMode === "debug"
+            ? row.tokenMode
+            : fallback.tokenMode,
         memoryBranch: row.memoryBranch || fallback.memoryBranch,
       }
+    } catch {
+      return fallback
+    }
+  }
+
+  private async getConfiguredTokenMode(): Promise<ContinuityTokenMode> {
+    const fallback = getContinuityTokenMode()
+    try {
+      const db = getDatabase()
+      const row = db
+        .select({ tokenMode: continuitySettings.tokenMode })
+        .from(continuitySettings)
+        .where(eq(continuitySettings.id, "singleton"))
+        .get()
+      if (
+        row?.tokenMode === "low" ||
+        row?.tokenMode === "normal" ||
+        row?.tokenMode === "debug"
+      ) {
+        return row.tokenMode
+      }
+      return fallback
     } catch {
       return fallback
     }
@@ -918,6 +1103,58 @@ class ContinuityService {
       return { action: "snapshot", reasons }
     }
     return { action: "ok", reasons: [] }
+  }
+
+  private async getDiffSnippet(repoRoot: string): Promise<string> {
+    try {
+      const { stdout } = await execFileAsync(
+        "git",
+        ["-C", repoRoot, "diff", "--unified=1", "--", "."],
+        {
+          timeout: 7_000,
+          maxBuffer: 2 * 1024 * 1024,
+        },
+      )
+      return clampByBytes(stdout.trim(), 4_000)
+    } catch {
+      return ""
+    }
+  }
+
+  private async getLatestFailingTestDigest(subChatId: string): Promise<string> {
+    try {
+      const db = getDatabase()
+      const row = db
+        .select({ messages: subChats.messages })
+        .from(subChats)
+        .where(eq(subChats.id, subChatId))
+        .get()
+      if (!row?.messages) return ""
+      const parsed = JSON.parse(row.messages) as Array<{
+        role?: string
+        parts?: Array<{ type?: string; text?: string }>
+      }>
+      const textLines: string[] = []
+      for (const message of parsed.slice(-12)) {
+        if (!Array.isArray(message.parts)) continue
+        for (const part of message.parts) {
+          if (part?.type === "text" && typeof part.text === "string") {
+            textLines.push(part.text)
+          }
+        }
+      }
+      const joined = textLines.join("\n")
+      const failureLines = joined
+        .split("\n")
+        .filter((line) =>
+          /fail|failed|error|exception|assert/i.test(line),
+        )
+        .slice(-40)
+      if (failureLines.length === 0) return ""
+      return clampByBytes(failureLines.join("\n"), 2_000)
+    } catch {
+      return ""
+    }
   }
 
   private async getDiffStats(repoRoot: string): Promise<{ totalLines: number }> {
@@ -1118,11 +1355,15 @@ class ContinuityService {
     }
   }
 
-  private async readSummary(repoRoot: string, relativePath: string): Promise<string | null> {
+  private async readSummary(
+    repoRoot: string,
+    relativePath: string,
+    maxFileReadBytes: number,
+  ): Promise<string | null> {
     const fullPath = path.join(repoRoot, relativePath)
     try {
       const stat = await fs.stat(fullPath)
-      if (!stat.isFile() || stat.size > MAX_FILE_READ_BYTES) {
+      if (!stat.isFile() || stat.size > maxFileReadBytes) {
         return null
       }
       const content = await fs.readFile(fullPath, "utf8")
